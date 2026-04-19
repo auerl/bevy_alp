@@ -35,6 +35,18 @@ struct AnimationIndices {
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
 
+#[derive(Component)]
+struct Bullet {
+    velocity: Vec2,
+}
+
+#[derive(Component, Deref, DerefMut)]
+struct Lifetime(Timer);
+
+const BULLET_SPEED: f32 = 600.0;
+const BULLET_LIFETIME_SECS: f32 = 1.5;
+const BULLET_SPAWN_OFFSET: f32 = 28.0;
+
 const MOVE_KEYS: [KeyCode; 8] = [
     KeyCode::KeyW,
     KeyCode::KeyA,
@@ -66,6 +78,8 @@ fn main() {
             Update,
             (
                 character_input,
+                shoot.after(character_input),
+                update_bullets,
                 animate_character.after(character_input),
                 camera_follow.after(character_input),
             ),
@@ -186,6 +200,45 @@ fn animate_character(
             } else {
                 atlas.index + 1
             };
+        }
+    }
+}
+
+fn shoot(
+    mut commands: Commands,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    query: Query<(&Transform, &Facing), With<Player>>,
+) {
+    if !keyboard.just_pressed(KeyCode::Space) {
+        return;
+    }
+    for (transform, facing) in &query {
+        let dir = match facing {
+            Facing::Up => Vec2::Y,
+            Facing::Down => Vec2::NEG_Y,
+            Facing::Left => Vec2::NEG_X,
+            Facing::Right => Vec2::X,
+        };
+        let spawn = transform.translation + (dir * BULLET_SPAWN_OFFSET).extend(0.0);
+        commands.spawn((
+            Sprite::from_color(Color::srgb(1.0, 0.9, 0.2), Vec2::new(8.0, 8.0)),
+            Transform::from_translation(spawn),
+            Bullet { velocity: dir * BULLET_SPEED },
+            Lifetime(Timer::from_seconds(BULLET_LIFETIME_SECS, TimerMode::Once)),
+        ));
+    }
+}
+
+fn update_bullets(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut query: Query<(Entity, &Bullet, &mut Transform, &mut Lifetime)>,
+) {
+    for (entity, bullet, mut transform, mut lifetime) in &mut query {
+        transform.translation.x += bullet.velocity.x * time.delta_secs();
+        transform.translation.y += bullet.velocity.y * time.delta_secs();
+        if lifetime.tick(time.delta()).is_finished() {
+            commands.entity(entity).despawn();
         }
     }
 }
