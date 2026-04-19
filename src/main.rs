@@ -43,9 +43,42 @@ struct Bullet {
 #[derive(Component, Deref, DerefMut)]
 struct Lifetime(Timer);
 
+#[derive(Component)]
+struct Enemy {
+    speed: f32,
+}
+
 const BULLET_SPEED: f32 = 600.0;
 const BULLET_LIFETIME_SECS: f32 = 1.5;
 const BULLET_SPAWN_OFFSET: f32 = 28.0;
+const BULLET_HIT_RADIUS: f32 = 4.0;
+
+const ENEMY_SPEED: f32 = 55.0;
+const ENEMY_HIT_RADIUS: f32 = 18.0;
+
+const MAP_TILE_W: f32 = 45.0;
+const MAP_TILE_H: f32 = 31.0;
+const TILE_PX: f32 = 16.0;
+const MAP_PX_W: f32 = MAP_TILE_W * TILE_PX;
+const MAP_PX_H: f32 = MAP_TILE_H * TILE_PX;
+
+const ENEMY_POSITIONS: &[(f32, f32)] = &[
+    (350.0, 220.0),
+    (-420.0, 380.0),
+    (520.0, -310.0),
+    (-640.0, -240.0),
+    (760.0, 120.0),
+    (-820.0, 460.0),
+    (220.0, -540.0),
+    (940.0, -100.0),
+    (-300.0, 640.0),
+    (640.0, 540.0),
+    (-720.0, -520.0),
+    (420.0, -740.0),
+    (-180.0, 180.0),
+    (1000.0, 380.0),
+    (-960.0, 80.0),
+];
 
 const MOVE_KEYS: [KeyCode; 8] = [
     KeyCode::KeyW,
@@ -80,6 +113,8 @@ fn main() {
                 character_input,
                 shoot.after(character_input),
                 update_bullets,
+                enemy_chase.after(character_input),
+                bullet_enemy_collision.after(update_bullets).after(enemy_chase),
                 animate_character.after(character_input),
                 camera_follow.after(character_input),
             ),
@@ -94,10 +129,38 @@ fn setup(
 ) {
     commands.spawn(Camera2d);
 
-    commands.spawn((
-        TiledMap(asset_server.load("ortho-map.tmx")),
-        TilemapAnchor::Center,
+    let map_handle = asset_server.load("ortho-map.tmx");
+    for gx in -1..=1 {
+        for gy in -1..=1 {
+            commands.spawn((
+                TiledMap(map_handle.clone()),
+                TilemapAnchor::Center,
+                Transform::from_xyz(gx as f32 * MAP_PX_W, gy as f32 * MAP_PX_H, 0.0),
+            ));
+        }
+    }
+
+    let enemy_texture = asset_server.load("textures/rpg/chars/gabe/gabe-idle-run.png");
+    let enemy_layout = atlas_layouts.add(TextureAtlasLayout::from_grid(
+        UVec2::splat(24),
+        7,
+        1,
+        None,
+        None,
     ));
+    for &(x, y) in ENEMY_POSITIONS {
+        commands.spawn((
+            Sprite::from_atlas_image(
+                enemy_texture.clone(),
+                TextureAtlas {
+                    layout: enemy_layout.clone(),
+                    index: 0,
+                },
+            ),
+            Transform::from_xyz(x, y, 5.0).with_scale(Vec3::splat(1.5)),
+            Enemy { speed: ENEMY_SPEED },
+        ));
+    }
 
     let texture = asset_server.load("textures/rpg/chars/professor_walk_cycle_no_hat.png");
     let layout = atlas_layouts.add(TextureAtlasLayout::from_grid(
@@ -240,6 +303,50 @@ fn update_bullets(
         if lifetime.tick(time.delta()).is_finished() {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+fn enemy_chase(
+    time: Res<Time>,
+    player: Query<&Transform, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<(&Enemy, &mut Transform), Without<Player>>,
+) {
+    let Some(p) = player.iter().next() else {
+        return;
+    };
+    for (enemy, mut transform) in &mut enemies {
+        let to_player = (p.translation - transform.translation).truncate();
+        if to_player.length_squared() < 1.0 {
+            continue;
+        }
+        let dir = to_player.normalize();
+        transform.translation.x += dir.x * enemy.speed * time.delta_secs();
+        transform.translation.y += dir.y * enemy.speed * time.delta_secs();
+    }
+}
+
+fn bullet_enemy_collision(
+    mut commands: Commands,
+    bullets: Query<(Entity, &Transform), (With<Bullet>, Without<Enemy>)>,
+    enemies: Query<(Entity, &Transform), (With<Enemy>, Without<Bullet>)>,
+) {
+    let hit_dist_sq = (ENEMY_HIT_RADIUS + BULLET_HIT_RADIUS).powi(2);
+    let mut to_despawn: Vec<Entity> = Vec::new();
+    'bullets: for (be, bt) in &bullets {
+        for (ee, et) in &enemies {
+            if to_despawn.contains(&ee) {
+                continue;
+            }
+            let d = (bt.translation - et.translation).truncate();
+            if d.length_squared() < hit_dist_sq {
+                to_despawn.push(be);
+                to_despawn.push(ee);
+                continue 'bullets;
+            }
+        }
+    }
+    for e in to_despawn {
+        commands.entity(e).despawn();
     }
 }
 
